@@ -249,6 +249,41 @@ class TestLoadThroughput:
         attrs = _attrs_of_nonzero_dps(_LOAD_METRIC)
         assert any(a.get("l2_name") == "mooncake_store" for a in attrs)
 
+    def test_series_per_adapter_of_same_type(self, subscriber):
+        # One P2P adapter per peer: all share l2_name, so only
+        # adapter_index tells a slow peer from a fast one.
+        subs = subscriber.get_subscriptions()
+        l2_name = "p2p_per_adapter_test"
+        # Adapter 3: 1 GB in 0.5 s -> 2 GB/s.  Adapter 4: 1 GB in 0.1 s -> 10 GB/s.
+        for adapter_index, duration in ((3, 0.5), (4, 0.1)):
+            subs[EventType.L2_LOAD_TASK_SUBMITTED](
+                _load_submitted(
+                    request_id=900,
+                    t=300.0,
+                    adapter_index=adapter_index,
+                    l2_name=l2_name,
+                    total_bytes=1_000_000_000,
+                )
+            )
+            subs[EventType.L2_LOAD_TASK_COMPLETED](
+                _load_completed(
+                    request_id=900,
+                    t=300.0 + duration,
+                    adapter_index=adapter_index,
+                    l2_name=l2_name,
+                )
+            )
+
+        sums = {
+            dp.attributes["adapter_index"]: dp.sum
+            for dp in _read_histograms()[_LOAD_METRIC]
+            if dp.attributes.get("l2_name") == l2_name
+        }
+        assert sums == {
+            3: pytest.approx(2.0, rel=1e-6),
+            4: pytest.approx(10.0, rel=1e-6),
+        }
+
 
 # ---------------------------------------------------------------------------
 # Edge cases
@@ -433,4 +468,6 @@ class TestEventBusIntegration:
 
         assert _total_count(_STORE_METRIC) == count_before + 1
         attrs = _attrs_of_nonzero_dps(_STORE_METRIC)
-        assert any(a.get("l2_name") == "fs" for a in attrs)
+        assert any(
+            a.get("l2_name") == "fs" and a.get("adapter_index") == 2 for a in attrs
+        )

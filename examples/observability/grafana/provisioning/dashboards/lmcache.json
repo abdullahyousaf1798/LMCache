@@ -1298,13 +1298,13 @@
         {
           "editorMode": "code",
           "expr": "rate(lmcache_mp_l2_store_throughput_GB_per_second_sum[$__rate_interval]) / rate(lmcache_mp_l2_store_throughput_GB_per_second_count[$__rate_interval])",
-          "legendFormat": "L1\u2192L2 store ({{l2_name}})",
+          "legendFormat": "L1\u2192L2 store ({{l2_name}}[{{adapter_index}}])",
           "refId": "A"
         },
         {
           "editorMode": "code",
           "expr": "rate(lmcache_mp_l2_load_throughput_GB_per_second_sum[$__rate_interval]) / rate(lmcache_mp_l2_load_throughput_GB_per_second_count[$__rate_interval])",
-          "legendFormat": "L2\u2192L1 load ({{l2_name}})",
+          "legendFormat": "L2\u2192L1 load ({{l2_name}}[{{adapter_index}}])",
           "refId": "B"
         }
       ],

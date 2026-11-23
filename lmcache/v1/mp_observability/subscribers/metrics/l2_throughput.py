@@ -3,7 +3,9 @@
 """L1↔L2 throughput metrics subscriber.
 
 Emits two OTel histograms in GB/s, labeled by ``l2_name`` (the registered
-adapter type, e.g. ``"fs"``, ``"nixl_store"``):
+adapter type, e.g. ``"fs"``, ``"nixl_store"``) and ``adapter_index`` (the
+adapter's id, which tells apart adapters of the same type, e.g. one ``p2p``
+adapter per peer):
   - ``lmcache_mp.l2_store_throughput``  — L1→L2 store
   - ``lmcache_mp.l2_load_throughput``   — L2→L1 load
 
@@ -13,7 +15,7 @@ Implementation:
   - Load path correlates ``L2_LOAD_TASK_SUBMITTED`` → ``L2_LOAD_TASK_COMPLETED``
     by ``(request_id, adapter_index)``.  One prefetch request may fan out
     across multiple adapters, so per-adapter correlation is required to
-    attribute throughput to the right ``l2_name``.
+    attribute throughput to the right adapter.
   - ``total_bytes`` is read from the SUBMITTED event and cached in the
     subscriber's pending dict alongside the start timestamp, so the
     COMPLETED event does not need to carry it.  This keeps the byte
@@ -52,8 +54,9 @@ class L2ThroughputSubscriber(EventSubscriber):
             description=(
                 "Histogram of L1->L2 store throughput in GB/s, measured "
                 "per task as total_bytes / (completed_ts - "
-                "submitted_ts).  Spans adapter queue + network/disk I/O, "
-                "so this is end-to-end latency-based throughput."
+                "submitted_ts), labeled by l2_name and adapter_index.  "
+                "Spans adapter queue + network/disk I/O, so this is "
+                "end-to-end latency-based throughput."
             ),
             unit="GB/s",
         )
@@ -62,8 +65,8 @@ class L2ThroughputSubscriber(EventSubscriber):
             description=(
                 "Histogram of L2->L1 load throughput in GB/s, measured "
                 "per (request, adapter) pair as total_bytes / "
-                "(completed_ts - submitted_ts).  Spans adapter queue + "
-                "network/disk I/O."
+                "(completed_ts - submitted_ts), labeled by l2_name and "
+                "adapter_index.  Spans adapter queue + network/disk I/O."
             ),
             unit="GB/s",
         )
@@ -183,8 +186,13 @@ class L2ThroughputSubscriber(EventSubscriber):
         if dt <= 0:
             return
 
+        # The correlation key already required ``adapter_index``.  Adapter
+        # ids are never reused, so this label adds one series per adapter
+        # ever added (e.g. per peer join), not per request.
+        attrs: dict[str, Any] = {
+            "adapter_index": int(event.metadata["adapter_index"]),
+        }
         l2_name = event.metadata.get("l2_name")
-        attrs: dict[str, Any] = {}
         if l2_name is not None:
             attrs["l2_name"] = str(l2_name)
 

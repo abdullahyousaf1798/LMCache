@@ -508,10 +508,20 @@ time. Treat the value as *bytes / end-to-end latency*, not raw transfer
 rate — useful for comparing adapter types and tracking regressions, not
 for validating peak fabric bandwidth.
 
-All throughput histograms carry a single `l2_name` OTel attribute — the
-registered adapter type (e.g. `"fs"`, `"nixl_store"`, `"mooncake_store"`)
-— enabling per-adapter-type slicing in Prometheus (e.g.
-`lmcache_mp_l2_store_throughput_gbs{l2_name="nixl_store"}`).
+The L1↔L2 throughput histograms carry two OTel attributes, the same pair
+as the in-flight gauges below:
+
+- `l2_name` — the registered adapter type (e.g. `"fs"`, `"nixl_store"`,
+  `"p2p"`), for per-type slicing
+  (`lmcache_mp_l2_store_throughput_gbs{l2_name="nixl_store"}`).
+- `adapter_index` — the adapter's id. P2P adds one `p2p` adapter per peer,
+  so this label is what separates a slow peer from a fast one; aggregate
+  with `sum by (l2_name)` to get the per-type view.
+
+Adapter ids are never reused: a peer that is removed and re-added gets a
+new id. A histogram keeps its series for the life of the process, so the
+series count is the number of adapters ever added, which is the number of
+peers unless peers churn.
 
 **Store-path fast-path accounting.** Some adapters skip the write when
 a key is already present in the backend, collapsing

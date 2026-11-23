@@ -623,10 +623,15 @@ latency*, not raw transfer rate. Use these histograms to compare
 adapter types and catch regressions; use the L0↔L1 histograms when you
 need pure copy-time throughput.
 
-All L1↔L2 throughput histograms carry a single ``l2_name`` OTel
-attribute — the registered adapter type (e.g. ``"fs"``, ``"nixl_store"``,
-``"mooncake_store"``) — enabling per-backend slicing in Prometheus (e.g.
-``lmcache_mp_l2_store_throughput_GB_per_second{l2_name="nixl_store"}``).
+All L1↔L2 throughput histograms carry two OTel attributes:
+
+- ``l2_name`` — the registered adapter type (e.g. ``"fs"``,
+  ``"nixl_store"``, ``"p2p"``), for per-backend slicing (e.g.
+  ``lmcache_mp_l2_store_throughput_GB_per_second{l2_name="nixl_store"}``).
+- ``adapter_index`` — the adapter's id, the same label as
+  ``lmcache_mp_num_inflight_l2_loads``. P2P adds one ``p2p`` adapter per
+  peer, so this label gives one series per peer. A peer that leaves and
+  rejoins gets a new id.
 
 .. list-table::
    :header-rows: 1
@@ -653,6 +658,10 @@ attribute — the registered adapter type (e.g. ``"fs"``, ``"nixl_store"``,
     # L2 -> L1 load throughput (same shape):
     sum by (l2_name) (rate(lmcache_mp_l2_load_throughput_GB_per_second_sum[1m]))
     / sum by (l2_name) (rate(lmcache_mp_l2_load_throughput_GB_per_second_count[1m]))
+
+    # L2 -> L1 load throughput per adapter (one series per P2P peer):
+    sum by (l2_name, adapter_index) (rate(lmcache_mp_l2_load_throughput_GB_per_second_sum[1m]))
+    / sum by (l2_name, adapter_index) (rate(lmcache_mp_l2_load_throughput_GB_per_second_count[1m]))
 
 .. note::
 
