@@ -207,6 +207,19 @@ points:
   url or a blocked port therefore raises a clear `TimeoutError` instead of
   hanging forever. The server's `_serve_loop` polls with a 1 s timeout so it can
   observe shutdown.
+- **Transport reporting.** UCX silently falls back to TCP when it cannot use
+  the RDMA devices, and NIXL does not expose which transport an endpoint
+  selected. With the UCX backend, the context therefore runs
+  `impl/ucx_rdma_check.py::check_ucx_rdma` once at creation. The check reads the
+  devices under `/sys/class/infiniband`, `UCX_TLS`, `UCX_NET_DEVICES`, access to
+  `/dev/infiniband/uverbs*`, and the port states. If RDMA is usable it logs
+  INFO; if RDMA devices exist but none is usable it logs one WARNING with the
+  cause. Each side sends the result as the optional `rdma_usable` field of
+  `MemRegReq` / `MemRegResp` (`None` = not reported, so older peers still
+  decode). `register_client` logs one line per new peer with the expected
+  network transport: RDMA only when both sides can use it. It is a WARNING when
+  this node can use RDMA and the peer reports it cannot. This is a prediction
+  from configuration, not UCX's choice; `UCX_PROTO_INFO=y` prints the latter.
 
 ## Extending: add a new transfer channel implementation
 
@@ -269,6 +282,8 @@ is the public creation entry point.
 - Integration tests for the nixl implementation (guarded by
   `pytest.importorskip("nixl")`, public interface only):
   `tests/v1/distributed/transfer_channel/test_nixl_impl.py`.
+- Unit tests for the UCX RDMA check against a fake sysfs and `/dev` tree:
+  `tests/v1/distributed/transfer_channel/test_ucx_rdma_check.py`.
 
 ## Related
 

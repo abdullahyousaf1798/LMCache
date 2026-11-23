@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Optional, Union
 import importlib
 import itertools
 import math
+import os
 import threading
 import uuid
 
@@ -28,6 +29,10 @@ from lmcache.v1.distributed.transfer_channel.abstract import (
 )
 from lmcache.v1.distributed.transfer_channel.factory import (
     register_transfer_channel_factory,
+)
+from lmcache.v1.distributed.transfer_channel.impl.ucx_rdma_check import (
+    UcxRdmaStatus,
+    check_ucx_rdma,
 )
 
 if TYPE_CHECKING:
@@ -90,10 +95,15 @@ class MemRegReq(HandshakeMsgBase):
     sender_agent_name: str
     sender_advertise_url: str
     xfer_descs: bytes
+    # Whether the sender's UCX can use RDMA; None when it does not say (a
+    # non-UCX backend or an older LMCache).
+    rdma_usable: bool | None = None
 
 
 class MemRegResp(HandshakeMsgBase):
     xfer_descs: bytes
+    # Same meaning as MemRegReq.rdma_usable, for the responder.
+    rdma_usable: bool | None = None
 
 
 HandshakeMsg = Union[InitReq, InitResp, MemRegReq, MemRegResp]
@@ -108,10 +118,14 @@ class NixlTransferChannelClient(TransferChannelClient):
         context: "NixlTransferChannelContext",
         remote_agent_name: str,
         remote_dlist_handle: "nixl_prepped_dlist_handle",
+        peer_rdma_usable: bool | None,
     ):
         self._ctx = context
         self._remote_agent_name = remote_agent_name
         self._remote_handle = remote_dlist_handle
+        # Whether the peer reported that its UCX can use RDMA; None when it
+        # did not report it.
+        self.peer_rdma_usable = peer_rdma_usable
 
         self._task_counter = 0
         # task_id -> (xfer_handle, remote_addresses)
@@ -333,9 +347,13 @@ class NixlTransferChannelServer(TransferChannelServer):
                     context=self._ctx,
                     remote_agent_name=req.sender_agent_name,
                     remote_dlist_handle=remote_handle,
+                    peer_rdma_usable=req.rdma_usable,
                 ),
             )
-            return MemRegResp(xfer_descs=self._ctx.serialized_xfer_descs)
+            return MemRegResp(
+                xfer_descs=self._ctx.serialized_xfer_descs,
+                rdma_usable=self._ctx.rdma_usable,
+            )
         else:
             raise ValueError(f"Unexpected handshake message: {type(req)}")
 
@@ -385,6 +403,14 @@ class NixlTransferChannelContext(TransferChannelContext):
         self.agent_name = str(uuid.uuid4())
         self.agent = nixl_agent(self.agent_name, nixl_agent_config(backends=backends))
 
+        # What this process's UCX can use, read from the same environment UCX
+        # read when the agent was created. None for non-UCX backends.
+        self._rdma_status: UcxRdmaStatus | None = (
+            check_ucx_rdma(os.environ) if "UCX" in backends else None
+        )
+        if self._rdma_status is not None:
+            self._log_rdma_status(self._rdma_status)
+
         # Local regions by id. L1 is registered first and is the only one
         # peers see.
         self._region_sizes: dict[int, int] = {}
@@ -409,6 +435,12 @@ class NixlTransferChannelContext(TransferChannelContext):
             l1_memory_desc=l1_memory_desc,
             context=self,
         )
+
+    @property
+    def rdma_usable(self) -> bool | None:
+        """Whether this process's UCX can use an RDMA device; None when the
+        context does not use the UCX backend."""
+        return None if self._rdma_status is None else self._rdma_status.rdma_usable
 
     ############################################################
     # Address translation
@@ -542,7 +574,9 @@ class NixlTransferChannelContext(TransferChannelContext):
 
         A client already registered for ``key`` is kept; ``client`` is then a
         redundant duplicate (the active connect and the peer's inbound
-        connection can race) and is closed.
+        connection can race) and is closed. When ``client`` is the first one
+        registered for ``key``, the network transport expected for the peer is
+        logged.
 
         Args:
             key: The peer advertise url to register the client under.
@@ -556,9 +590,14 @@ class NixlTransferChannelContext(TransferChannelContext):
             existing = self._clients.get(key)
             if existing is None:
                 self._clients[key] = client
-                return client
-            if existing is client:
-                return client
+        if existing is None:
+            if self._rdma_status is not None:
+                self._log_peer_transport(
+                    key, self._rdma_status, client.peer_rdma_usable
+                )
+            return client
+        if existing is client:
+            return client
 
         logger.debug("Reusing existing transfer channel client for %s", key)
         try:
@@ -674,6 +713,7 @@ class NixlTransferChannelContext(TransferChannelContext):
                         sender_agent_name=self.agent_name,
                         sender_advertise_url=self.advertise_url,
                         xfer_descs=self.serialized_xfer_descs,
+                        rdma_usable=self.rdma_usable,
                     )
                 )
             )
@@ -692,7 +732,66 @@ class NixlTransferChannelContext(TransferChannelContext):
             context=self,
             remote_agent_name=server_agent_name,
             remote_dlist_handle=remote_handle,
+            peer_rdma_usable=memreg_resp.rdma_usable,
         )
+
+    @staticmethod
+    def _log_rdma_status(status: UcxRdmaStatus) -> None:
+        """Log once what UCX can use, warning on a silent TCP fallback."""
+        if status.rdma_usable:
+            logger.info(
+                "NIXL transfer channel: UCX can use RDMA devices %s (%d of %d "
+                "found). Set UCX_PROTO_INFO=y to print the transport UCX picks "
+                "for each operation.",
+                ", ".join(status.usable_devices),
+                len(status.usable_devices),
+                len(status.rdma_devices),
+            )
+        elif status.rdma_devices:
+            logger.warning(
+                "NIXL transfer channel: RDMA devices %s are present but UCX "
+                "cannot use them: %s. P2P transfers will go over TCP, which is "
+                "several times slower than RDMA.",
+                ", ".join(status.rdma_devices),
+                status.reason,
+            )
+        else:
+            logger.info(
+                "NIXL transfer channel: no RDMA devices found; UCX will send "
+                "P2P transfers over TCP."
+            )
+
+    @staticmethod
+    def _log_peer_transport(
+        peer_url: str, status: UcxRdmaStatus, peer_rdma_usable: bool | None
+    ) -> None:
+        """Log the network transport expected for a newly connected peer."""
+        if not status.rdma_usable:
+            logger.info(
+                "NIXL transfer channel: connected to peer %s; expected network "
+                "transport: TCP (this node cannot use RDMA).",
+                peer_url,
+            )
+        elif peer_rdma_usable:
+            logger.info(
+                "NIXL transfer channel: connected to peer %s; expected network "
+                "transport: RDMA.",
+                peer_url,
+            )
+        elif peer_rdma_usable is None:
+            logger.info(
+                "NIXL transfer channel: connected to peer %s; expected network "
+                "transport: RDMA if the peer can use it (the peer does not "
+                "report it).",
+                peer_url,
+            )
+        else:
+            logger.warning(
+                "NIXL transfer channel: connected to peer %s; expected network "
+                "transport: TCP, because the peer cannot use RDMA although this "
+                "node can. The peer's log names the cause.",
+                peer_url,
+            )
 
 
 ############################################################

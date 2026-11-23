@@ -290,6 +290,25 @@ With ``LMCACHE_LOG_LEVEL=DEBUG``, each server logs ``Added P2P adapter ... for
 peer <instance-id>`` when it connects to a peer, and ``Removed P2P adapter ...``
 when a peer leaves.
 
+UCX falls back to TCP without an error when it cannot use the RDMA devices, and
+TCP transfers are several times slower. With the ``nixl`` transfer channel, each
+server therefore logs at startup which RDMA devices UCX can use, and one line per
+new peer with the expected network transport:
+
+.. code-block:: text
+
+   NIXL transfer channel: UCX can use RDMA devices mlx5_0, mlx5_1, ... (8 of 10 found). ...
+   NIXL transfer channel: connected to peer 10.0.0.3:7600; expected network transport: RDMA.
+
+When RDMA devices exist but UCX cannot use them, the startup line is a warning
+that names the cause and the fix: ``UCX_TLS`` or ``UCX_NET_DEVICES`` excludes
+them, the process cannot open ``/dev/infiniband/uverbs*`` (for example, a
+container without the RDMA device plugin), or no port is ``ACTIVE``. A peer that
+cannot use RDMA while this node can is also reported as a warning. These lines
+come from a check of the devices and the UCX environment, not from UCX itself;
+set ``UCX_PROTO_INFO=y`` to have UCX print the transport it selects for each
+operation. Two peers on the same host may use shared memory instead of either.
+
 Using the agent skills
 ----------------------
 

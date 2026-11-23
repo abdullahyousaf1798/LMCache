@@ -20,8 +20,11 @@ an existing context's connected clients short of closing it.
 """
 
 # Standard
+from collections.abc import Iterator
 from unittest.mock import MagicMock
 import itertools
+import logging
+import os
 import time
 
 # Third Party
@@ -35,6 +38,9 @@ from lmcache import torch_dev, torch_device_type  # noqa: E402
 from lmcache.v1.distributed.internal_api import L1MemoryDesc  # noqa: E402
 from lmcache.v1.distributed.transfer_channel.impl.nixl_impl import (  # noqa: E402
     NixlTransferChannelContext,
+)
+from lmcache.v1.distributed.transfer_channel.impl.ucx_rdma_check import (  # noqa: E402
+    check_ucx_rdma,
 )
 
 _ALIGN = 256
@@ -407,3 +413,89 @@ def test_region_size_must_be_multiple_of_alignment(shared_contexts):
     ctx_a, buf_a, _, _ = shared_contexts
     with pytest.raises(ValueError):
         ctx_a.register_memory_region(buf_a.data_ptr(), _ALIGN + 1)
+
+
+# =========================================================
+# Transport reporting
+# =========================================================
+class _CaptureHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@pytest.fixture
+def nixl_logs() -> Iterator[list[logging.LogRecord]]:
+    """Collect records from the nixl_impl logger, which does not propagate to
+    pytest's caplog."""
+    handler = _CaptureHandler()
+    lg = logging.getLogger(NixlTransferChannelContext.__module__)
+    lg.addHandler(handler)
+    try:
+        yield handler.records
+    finally:
+        lg.removeHandler(handler)
+
+
+def _peer_lines(records: list[logging.LogRecord], peer_url: str) -> list:
+    return [
+        r for r in records if "peer" in r.getMessage() and peer_url in r.getMessage()
+    ]
+
+
+def test_new_peer_logs_expected_transport_once_on_each_side(fresh_contexts, nixl_logs):
+    ctx_a, _, ctx_b, _ = fresh_contexts
+    expected = "RDMA" if check_ucx_rdma(os.environ).rdma_usable else "TCP"
+
+    ctx_a.get_transfer_channel_client(ctx_b.advertise_url)
+    ctx_a.get_transfer_channel_client(ctx_b.advertise_url)
+
+    for peer_url in (ctx_b.advertise_url, ctx_a.advertise_url):
+        lines = _peer_lines(nixl_logs, peer_url)
+        assert len(lines) == 1
+        assert lines[0].levelno == logging.INFO
+        assert expected in lines[0].getMessage()
+
+
+@pytest.mark.skipif(
+    not check_ucx_rdma(os.environ).rdma_usable,
+    reason="needs a host where UCX can use RDMA",
+)
+def test_peer_without_rdma_is_reported_as_tcp_with_a_warning(monkeypatch, nixl_logs):
+    buf_a = torch.zeros(_BUF_SIZE, dtype=torch.uint8)
+    buf_b = torch.zeros(_BUF_SIZE, dtype=torch.uint8)
+    url_a, url_b = _next_url(), _next_url()
+    ctx_a = NixlTransferChannelContext(
+        L1MemoryDesc(ptr=buf_a.data_ptr(), size=_BUF_SIZE, align_bytes=_ALIGN),
+        listen_url=url_a,
+        advertise_url=url_a,
+    )
+    # B's UCX reads this when B's agent is created, so only B loses RDMA.
+    monkeypatch.setenv("UCX_TLS", "tcp,self,cuda_copy")
+    ctx_b = NixlTransferChannelContext(
+        L1MemoryDesc(ptr=buf_b.data_ptr(), size=_BUF_SIZE, align_bytes=_ALIGN),
+        listen_url=url_b,
+        advertise_url=url_b,
+    )
+    try:
+        startup_warnings = [
+            r
+            for r in nixl_logs
+            if r.levelno == logging.WARNING and "UCX_TLS" in r.getMessage()
+        ]
+        assert len(startup_warnings) == 1
+
+        ctx_a.get_transfer_channel_client(url_b)
+
+        (a_about_b,) = _peer_lines(nixl_logs, url_b)
+        assert a_about_b.levelno == logging.WARNING
+        assert "TCP" in a_about_b.getMessage()
+        (b_about_a,) = _peer_lines(nixl_logs, url_a)
+        assert b_about_a.levelno == logging.INFO
+        assert "TCP" in b_about_a.getMessage()
+    finally:
+        ctx_a.close()
+        ctx_b.close()

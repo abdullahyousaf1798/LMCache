@@ -43,7 +43,7 @@ Each entry: how it shows up, how to confirm, what to do. Logs are `$P2P_HOME/log
 
 | symptom | confirm | fix |
 |---|---|---|
-| peer TTFT barely below cold; `rail_check.sh` says `traffic went over TCP` | no RDMA devices, or UCX could not use them (no reachable GID/route, `UCX_TLS` without `rc`) | `check_rdma.sh`: devices Active, routes to the peer's GIDs; let UCX default or set `UCX_TLS=rc,sm,self,cuda_copy` |
+| peer TTFT barely below cold; `rail_check.sh` says `traffic went over TCP`; `lmcache.log` has `NIXL transfer channel: RDMA devices ... are present but UCX cannot use them` or `expected network transport: TCP` | no RDMA devices, or UCX could not use them (the warning names the cause: `UCX_TLS` without `rc`, `UCX_NET_DEVICES`, no `/dev/infiniband/uverbs*` access, no ACTIVE port; it cannot see a missing GID/route) | `check_rdma.sh`: devices Active, routes to the peer's GIDs; let UCX default or set `UCX_TLS=rc,sm,self,cuda_copy` |
 | `rail_check.sh`: 1 of N devices | UCX defaults to one device | set the multi-rail variables from `lmcache-p2p-launch/references/ucx-multirail.md` (gen_env.sh does) |
 | `rail_check.sh`: exactly half the devices, all on one NUMA node | `UCX_MAX_RMA_RAILS` too small: rails count paths and LAG bonds have two | `UCX_MAX_RMA_RAILS = devices x 2` (16 for 8 bonds); confirm with `ucx_lanes.sh` (16 lanes at ~7%) |
 | rails are right but TTFT does not move | workload not fabric-bound: `vllm_wait` high, L1-to-GPU copies, 15k-token prompts at 16 in flight | compare against the local-L1-hit baseline (`bench_ldqa.sh --with-local-baseline`); tune concurrency / engine, not UCX |
