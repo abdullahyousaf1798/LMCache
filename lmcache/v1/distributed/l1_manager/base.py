@@ -464,6 +464,7 @@ class BaseL1Manager(L1ManagerInterface):
                     "l1_tag": self._config.tag,
                     "keys": need_to_free_keys,
                     "meta": freed_meta,
+                    "reason": "evict",
                 },
             )
         )
@@ -813,7 +814,7 @@ class BaseL1Manager(L1ManagerInterface):
             ret[key] = L1Error.SUCCESS
             successful_keys.append(key)
 
-        self._free_and_report_deleted(successful_keys, need_to_free)
+        self._free_and_report_deleted(successful_keys, need_to_free, "evict")
         self._report_staging_gone(gone_keys)
         return ret
 
@@ -915,6 +916,7 @@ class BaseL1Manager(L1ManagerInterface):
                         "l1_tag": self._config.tag,
                         "keys": all_keys,
                         "meta": all_meta,
+                        "reason": "clear",
                     },
                 )
             )
@@ -945,7 +947,7 @@ class BaseL1Manager(L1ManagerInterface):
             del self._objects[key]
 
         if keys_to_clear:
-            self._free_and_report_deleted(keys_to_clear, objs_to_free)
+            self._free_and_report_deleted(keys_to_clear, objs_to_free, "clear")
 
         reclaimed_count = 0
         gone_keys: list[ObjectKey] = []
@@ -1263,9 +1265,17 @@ class BaseL1Manager(L1ManagerInterface):
         self,
         keys: list[ObjectKey],
         objs: list[MemoryObj],
+        reason: str,
     ) -> None:
         """Free ``objs`` and report ``keys`` as deleted to listeners and
-        the event bus."""
+        the event bus.
+
+        Args:
+            keys: The deleted keys.
+            objs: Their memory objects, freed here.
+            reason: ``L1_KEYS_EVICTED.reason``: ``"clear"`` from
+                :meth:`clear`, ``"evict"`` otherwise.
+        """
         freed_meta = [self._object_meta(obj) for obj in objs]
         self._memory_manager.free(objs)
 
@@ -1274,7 +1284,12 @@ class BaseL1Manager(L1ManagerInterface):
         self._event_bus.publish(
             Event(
                 event_type=EventType.L1_KEYS_EVICTED,
-                metadata={"l1_tag": self._config.tag, "keys": keys, "meta": freed_meta},
+                metadata={
+                    "l1_tag": self._config.tag,
+                    "keys": keys,
+                    "meta": freed_meta,
+                    "reason": reason,
+                },
             )
         )
 

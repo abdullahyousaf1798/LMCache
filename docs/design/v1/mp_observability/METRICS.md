@@ -106,7 +106,7 @@ datapoints and are orthogonal to these Resource attributes.
 
 | OTel metric name | Prometheus name | Type | Source event | Calculation |
 |---|---|---|---|---|
-| `lmcache_mp.l1_evicted` | `lmcache_mp_l1_evicted_chunks_total` | Counter (attr: `cache_salt`) | `L1_KEYS_EVICTED` | `+len(keys)` per `cache_salt` |
+| `lmcache_mp.l1_evicted` | `lmcache_mp_l1_evicted_chunks_total` | Counter (attr: `cache_salt`) | `L1_KEYS_EVICTED` | `+len(keys)` per `cache_salt`; skipped when `reason == "clear"` |
 | `lmcache_mp.l1_eviction_loop_ticks` | `lmcache_mp_l1_eviction_loop_ticks_total` | Counter | `L1_EVICTION_LOOP_TICK` | +1 per loop iteration |
 | `lmcache_mp.l1_eviction_loop_triggered` | `lmcache_mp_l1_eviction_loop_triggered_total` | Counter | `L1_EVICTION_LOOP_TICK` | +1 when `triggered=True` |
 | `lmcache_mp.l1_usage_ratio` | `lmcache_mp_l1_usage_ratio` | Observable Gauge | (callback on `BaseL1Manager`) | `used / total` at scrape time |
@@ -159,7 +159,9 @@ overloaded or stuck MQ/transfer/adapter path.
 ## L1 Chunk Lifecycle Histograms
 
 Sampled (default 1%) chunk-level lifecycle tracking.  Only sampled chunks
-contribute to histograms; counters above always count all events.
+contribute to histograms; counters above always count all events.  An
+`L1_KEYS_EVICTED` with `reason == "clear"` drops the sampled chunks without
+recording a lifetime, idle or evict-reuse sample.
 
 | OTel metric name | Prometheus name | Type | Source event | Calculation |
 |---|---|---|---|---|

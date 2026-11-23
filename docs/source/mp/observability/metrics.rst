@@ -86,7 +86,7 @@ L1 Metrics
    * - ``lmcache_mp.l1_evicted``
      - Counter (attr: ``cache_salt``)
      - Number of chunks evicted by the EvictionController, grouped by
-       tenant.
+       tenant. Clearing L1 (``lmcache kvcache clear``) is not counted.
    * - ``lmcache_mp.l1_eviction_loop_ticks``
      - Counter
      - L1 eviction-loop iterations (every cycle, regardless of whether
@@ -117,7 +117,8 @@ memory overhead.
      - Description
    * - ``lmcache_mp.l1_chunk_lifetime``
      - Histogram
-     - Time from allocation to eviction per sampled chunk.
+     - Time from allocation to eviction per sampled chunk. Clearing L1
+       records no lifecycle samples.
    * - ``lmcache_mp.l1_chunk_idle_before_evict``
      - Histogram
      - Time from last access to eviction per sampled chunk.

@@ -23,7 +23,8 @@ class L1MetricsSubscriber(EventSubscriber):
     Metric parity with the old ``L1ManagerStatsLogger``:
     - ``lmcache_mp.l1_read``    — chunks read from L1
     - ``lmcache_mp.l1_write``   — chunks written to L1
-    - ``lmcache_mp.l1_evicted`` — chunks evicted from L1
+    - ``lmcache_mp.l1_evicted`` — chunks evicted from L1 (an L1 clear
+      is not an eviction and is not counted)
     """
 
     def __init__(self) -> None:
@@ -71,6 +72,10 @@ class L1MetricsSubscriber(EventSubscriber):
         )
 
     def _on_evicted(self, event: Event) -> None:
+        # An operator clear would otherwise hide real capacity evictions,
+        # the ones that cost cache hits.
+        if event.metadata["reason"] == "clear":
+            return
         emit_salt_counts(
             self._evicted_counter,
             group_by_salt(event.metadata["keys"]),

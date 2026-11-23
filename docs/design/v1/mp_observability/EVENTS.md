@@ -17,7 +17,7 @@ these events see [METRICS.md](METRICS.md).
 | `L1_WRITE_RESERVED` | `keys`, `tag` | `list[ObjectKey]`, `str` |
 | `L1_WRITE_FINISHED` | `keys` | `list[ObjectKey]` |
 | `L1_WRITE_FINISHED_AND_READ_RESERVED` | `keys` | `list[ObjectKey]` |
-| `L1_KEYS_EVICTED` | `keys` | `list[ObjectKey]` |
+| `L1_KEYS_EVICTED` | `keys`, `reason` | `list[ObjectKey]`, `str` |
 | `L1_EVICTION_LOOP_TICK` | `usage`, `watermark`, `triggered` | `float`, `float`, `bool` |
 
 `L1_WRITE_RESERVED.tag` names the writer that staged the keys (e.g.
@@ -26,6 +26,18 @@ these events see [METRICS.md](METRICS.md).
 reclaimed without becoming resident publishes **no** event (it is logged at
 debug level): `L1_KEYS_EVICTED` is reserved for admitted objects, which is
 what the coordinator cache-event reporter and the L1 byte metrics assume.
+
+`L1_KEYS_EVICTED` fires for every resident object that leaves L1, whatever
+the cause, so subscribers that clean up after a key (coordinator cache
+events, KV events, blend fingerprints) see all removals. `reason` says why:
+
+| `reason` | Producer |
+|---|---|
+| `clear` | `clear()` (e.g. `lmcache kvcache clear`), with or without `force` |
+| `evict` | every other removal: `delete()` (eviction controller, store policy, `DELETE /cache/objects`) and the release of a temporary object after its last read |
+
+The eviction metrics skip `clear`: emptying L1 on purpose is not capacity
+pressure, and counting it would hide the evictions that cost cache hits.
 
 `L1_EVICTION_LOOP_TICK` fires once per `L1EvictionController.eviction_loop`
 iteration (default ~1Hz).  `triggered` is `True` when `usage >= watermark`

@@ -37,8 +37,11 @@ def _make_keys(prefix: str, count: int) -> list:
     return [f"{prefix}-{i}" for i in range(count)]
 
 
-def _make_event(event_type: EventType, keys: list) -> Event:
-    return Event(event_type=event_type, metadata={"keys": keys})
+def _make_event(event_type: EventType, keys: list, reason: str = "evict") -> Event:
+    metadata: dict = {"keys": keys}
+    if event_type == EventType.L1_KEYS_EVICTED:
+        metadata["reason"] = reason
+    return Event(event_type=event_type, metadata=metadata)
 
 
 def _get_histogram_count(name: str) -> int:
@@ -220,6 +223,29 @@ class TestL1EvictReuseGap:
         assert (None, "erg-3") not in subscriber._evicted_at
 
 
+class TestL1Clear:
+    def test_clear_is_not_an_eviction(self, bus, subscriber):
+        """A cleared chunk records no eviction sample, and writing it again
+        is a fresh chunk rather than a quick evict-and-reuse."""
+        names = (
+            "lmcache_mp.l1_chunk_lifetime",
+            "lmcache_mp.l1_chunk_idle_before_evict",
+            "lmcache_mp.l1_chunk_evict_reuse_gap",
+            "lmcache_mp.l1_chunk_reuse_gap",
+        )
+        before = {name: _get_histogram_count(name) for name in names}
+        keys = ["clr-1", "clr-2"]
+        bus.start()
+        bus.publish(_make_event(EventType.L1_WRITE_FINISHED, keys))
+        time.sleep(_DRAIN_WAIT)
+        bus.publish(_make_event(EventType.L1_KEYS_EVICTED, keys, reason="clear"))
+        time.sleep(_DRAIN_WAIT)
+        bus.publish(_make_event(EventType.L1_WRITE_FINISHED, keys))
+        time.sleep(_DRAIN_WAIT)
+        bus.stop()
+        assert {name: _get_histogram_count(name) for name in names} == before
+
+
 # ---------------------------------------------------------------------------
 # Tests: Sampling
 # ---------------------------------------------------------------------------
@@ -345,7 +371,7 @@ def test_same_key_lifetimes_are_separate_for_each_l1() -> None:
             Event(
                 event_type=kind,
                 timestamp=timestamp,
-                metadata={"keys": ["same-key"], "l1_tag": tag},
+                metadata={"keys": ["same-key"], "l1_tag": tag, "reason": "evict"},
             )
         )
     data = _reader.get_metrics_data()

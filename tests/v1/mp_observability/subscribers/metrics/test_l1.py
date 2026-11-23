@@ -25,8 +25,11 @@ def _make_keys(count: int, cache_salt: str = "") -> list:
     return [SimpleNamespace(cache_salt=cache_salt, id=i) for i in range(count)]
 
 
-def _make_event(event_type: EventType, keys: list) -> Event:
-    return Event(event_type=event_type, metadata={"keys": keys})
+def _make_event(event_type: EventType, keys: list, reason: str = "evict") -> Event:
+    metadata: dict = {"keys": keys}
+    if event_type == EventType.L1_KEYS_EVICTED:
+        metadata["reason"] = reason
+    return Event(event_type=event_type, metadata=metadata)
 
 
 def _read_counters_by_attrs() -> dict[str, dict[tuple, int]]:
@@ -87,6 +90,32 @@ class TestL1MetricsSubscriber:
         bus.publish(_make_event(EventType.L1_KEYS_EVICTED, _make_keys(4)))
         time.sleep(_DRAIN_WAIT)
         bus.stop()
+
+    def test_cleared_keys_not_counted_as_evicted(self, bus, subscriber):
+        """A clear removes keys but is not an eviction: only capacity-driven
+        removals move the eviction counter."""
+        before = _read_counters_by_attrs().get("lmcache_mp.l1_evicted", {})
+        bus.start()
+        bus.publish(
+            _make_event(
+                EventType.L1_KEYS_EVICTED,
+                _make_keys(6, cache_salt="clr"),
+                reason="clear",
+            )
+        )
+        bus.publish(
+            _make_event(
+                EventType.L1_KEYS_EVICTED,
+                _make_keys(2, cache_salt="clr"),
+                reason="evict",
+            )
+        )
+        time.sleep(_DRAIN_WAIT)
+        bus.stop()
+
+        after = _read_counters_by_attrs().get("lmcache_mp.l1_evicted", {})
+        key = (("cache_salt", "clr"),)
+        assert after.get(key, 0) - before.get(key, 0) == 2
 
     def test_no_subscription_for_reserved_events(self, subscriber):
         subs = subscriber.get_subscriptions()

@@ -185,10 +185,13 @@ class L1LifecycleSubscriber(EventSubscriber):
         now = event.timestamp or time.time()
         tag = event.metadata.get("l1_tag")
         attrs = {"l1_tag": tag} if tag is not None else None
+        # A cleared chunk was not evicted: forget it without a sample, so
+        # rewriting it after the clear is not reported as a quick reuse.
+        cleared = event.metadata["reason"] == "clear"
         for key in event.metadata["keys"]:
             identity = (tag, key)
             state = self._shadow.pop(identity, None)
-            if state is not None:
+            if state is not None and not cleared:
                 self._lifetime_hist.record(now - state.alloc_time, attributes=attrs)
                 self._idle_hist.record(now - state.last_access_time, attributes=attrs)
                 # Start tracking eviction-to-reuse gap (only for sampled).
